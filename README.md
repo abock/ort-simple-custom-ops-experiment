@@ -31,6 +31,30 @@ static OrtSimpleCustomOpConfig custom_ops[] = {
         .kernel_compute = custom_op2_kernel
     }
 };
+
+void Register(...)
+{
+    ...
+
+    OrtCustomOpDomain* custom_op_domain;
+    if ((ort_status = OrtSimpleCustomOpRegister(
+        ort,
+        NULL /* allocator */,
+        "test.customop",
+        custom_ops,
+        sizeof(custom_ops) / sizeof(custom_ops[0]),
+        &custom_op_domain,
+        NULL /* custom_ops */)) != NULL) {
+        return ort_error(ort, ort_status);
+    }
+
+    if ((ort_status = ort->AddCustomOpDomain(ort_session_options, custom_op_domain)) != NULL) {
+        return ort_error(ort, ort_status);
+    }
+
+    ...
+}
+
 ```
 
 ### Example Custom Op Kernels
