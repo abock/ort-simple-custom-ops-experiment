@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <math.h>
@@ -17,12 +20,6 @@ static int ort_error(const OrtApi* ort, OrtStatus* status)
     return 1;
 }
 
-_Noreturn static void ort_abort(const OrtApi* ort, OrtStatus* status)
-{
-    ort_error(ort, status);
-    abort();
-}
-
 static void random_fill(float* buffer, size_t buffer_size)
 {
     for (size_t i = 0; i < buffer_size; i++) {
@@ -30,120 +27,81 @@ static void random_fill(float* buffer, size_t buffer_size)
     }
 }
 
-static void kernel_prepare_buffers(
+static void custom_op1_kernel(
+    const OrtSimpleCustomOp* op,
     const OrtApi* ort,
-    const OrtKernelContext* context,
-    size_t *buffer_size,
-    void **input_x_buffer,
-    void **input_y_buffer,
-    void **output_buffer)
+    const OrtKernelContext* context)
 {
-    OrtStatus* ort_status = NULL;
+    OrtSimpleCustomOpIO input_x;
+    OrtSimpleCustomOpGetInput(op, context, 0, &input_x);
 
-    const OrtValue* input_x;
-    if ((ort_status = ort->KernelContext_GetInput(context, 0, &input_x)) != NULL) {
-        ort_abort(ort, ort_status);
+    OrtSimpleCustomOpIO input_y;
+    OrtSimpleCustomOpGetInput(op, context, 1, &input_y);
+
+    OrtSimpleCustomOpIO output;
+    OrtSimpleCustomOpGetOutput(op, context, 0, input_x.dims, input_x.dims_len, &output);
+
+    float* input_x_buffer = (float*)input_x.buffer;
+    float* input_y_buffer = (float*)input_y.buffer;
+    float* output_buffer = (float*)output.buffer;
+
+    for (size_t i = 0; i < input_x.buffer_len; i++) {
+        output_buffer[i] = input_x_buffer[i] + input_y_buffer[i];
     }
 
-    if ((ort_status = ort->GetTensorMutableData((OrtValue*)input_x, input_x_buffer)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
-
-    if (input_y_buffer != NULL) {
-        const OrtValue* input_y;
-        if ((ort_status = ort->KernelContext_GetInput(context, 1, &input_y)) != NULL) {
-            ort_abort(ort, ort_status);
-        }
-
-        if ((ort_status = ort->GetTensorMutableData((OrtValue*)input_y, input_y_buffer)) != NULL) {
-            ort_abort(ort, ort_status);
-        }
-    }
-
-    OrtTensorTypeAndShapeInfo* type_and_shape_info;
-    if ((ort_status = ort->GetTensorTypeAndShape(input_x, &type_and_shape_info)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
-
-    size_t actual_dims_count;
-    if ((ort_status = ort->GetDimensionsCount(
-        (const OrtTensorTypeAndShapeInfo*)type_and_shape_info,
-        &actual_dims_count)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
-
-    int64_t dims[2];
-    const size_t dims_count = sizeof(dims) / sizeof(dims[0]);
-    if ((ort_status = ort->GetDimensions(
-        (const OrtTensorTypeAndShapeInfo*)type_and_shape_info,
-        dims,
-        dims_count)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
-
-    if (actual_dims_count != dims_count) {
-        fprintf(stderr, "kernel1_compute: expected %ld dimensions, got %ld\n",
-            dims_count, actual_dims_count);
-        ort_abort(ort, NULL);
-    }
-
-    if ((ort_status = ort->GetTensorShapeElementCount(type_and_shape_info, buffer_size)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
-
-    OrtValue* output;
-    if ((ort_status = ort->KernelContext_GetOutput(
-        (OrtKernelContext*)context,
-        0,
-        dims,
-        dims_count,
-        &output)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
-
-    if ((ort_status = ort->GetTensorMutableData((OrtValue*)output, output_buffer)) != NULL) {
-        ort_abort(ort, ort_status);
-    }
+    OrtSimpleCustomOpIORelease(op, &input_x);
+    OrtSimpleCustomOpIORelease(op, &input_y);
+    OrtSimpleCustomOpIORelease(op, &output);
 }
 
-static void kernel1_compute(const OrtApi* ort, const OrtKernelContext* context)
+static void custom_op2_kernel(
+    const OrtSimpleCustomOp* op,
+    const OrtApi* ort,
+    const OrtKernelContext* context)
 {
-    size_t buffer_size;
-    const float *input_x_buffer;
-    const float *input_y_buffer;
-    float *output_buffer;
+    OrtSimpleCustomOpIO input;
+    OrtSimpleCustomOpGetInput(op, context, 0, &input);
 
-    kernel_prepare_buffers(
-        ort,
-        context,
-        &buffer_size,
-        (void**)&input_x_buffer,
-        (void**)&input_y_buffer,
-        (void**)&output_buffer);
+    OrtSimpleCustomOpIO output;
+    OrtSimpleCustomOpGetOutput(op, context, 0, input.dims, input.dims_len, &output);
 
-    for (size_t i = 0; i < buffer_size; i++) {
-      output_buffer[i] = input_x_buffer[i] + input_y_buffer[i];
+    float* input_buffer = (float*)input.buffer;
+    int32_t* output_buffer = (int32_t*)output.buffer;
+
+    for (size_t i = 0; i < input.buffer_len; i++) {
+        output_buffer[i] = round(input_buffer[i]);
     }
+
+    OrtSimpleCustomOpIORelease(op, &input);
+    OrtSimpleCustomOpIORelease(op, &output);
 }
 
-static void kernel2_compute(const OrtApi* ort, const OrtKernelContext* context)
-{
-    size_t buffer_size;
-    const float *input_buffer;
-    int32_t *output_buffer;
-
-    kernel_prepare_buffers(
-        ort,
-        context,
-        &buffer_size,
-        (void**)&input_buffer,
-        NULL,
-        (void**)&output_buffer);
-
-    for (size_t i = 0; i < buffer_size; i++) {
-      output_buffer[i] = round(input_buffer[i]);
+static OrtSimpleCustomOpConfig custom_ops[] = {
+    {
+        .name = "CustomOpOne",
+        .inputs = {
+            .count = 2,
+            .homogenous_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+        },
+        .outputs = {
+            .count = 1,
+            .homogenous_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+        },
+        .kernel_compute = custom_op1_kernel
+    },
+    {
+        .name = "CustomOpTwo",
+        .inputs = {
+            .count = 1,
+            .homogenous_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+        },
+        .outputs = {
+            .count = 1,
+            .homogenous_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
+        },
+        .kernel_compute = custom_op2_kernel
     }
-}
+};
 
 int main(int argc, const char* const* argv)
 {
@@ -160,52 +118,20 @@ int main(int argc, const char* const* argv)
         return ort_error(ort, ort_status);
     }
 
-    OrtCustomOpDomain* custom_op_domain;
-    if ((ort_status = ort->CreateCustomOpDomain("test.customop", &custom_op_domain)) != NULL) {
-        return ort_error(ort, ort_status);
-    }
-
-    OrtSimpleCustomOp custom_op1;
-    ONNXTensorElementDataType custom_op1_input_types[] = {
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-    };
-    ONNXTensorElementDataType custom_op1_output_types[] = {
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
-    };
-    OrtInitializeSimpleCustomOp(
-        ort,
-        "CustomOpOne",
-        2, custom_op1_input_types,
-        1, custom_op1_output_types,
-        kernel1_compute,
-        &custom_op1);
-
-    if ((ort_status = ort->CustomOpDomain_Add(custom_op_domain, &custom_op1.base_op)) != NULL) {
-        return ort_error(ort, ort_status);
-    }
-
-    OrtSimpleCustomOp custom_op2;
-    ONNXTensorElementDataType custom_op2_input_types[] = {
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-    };
-    ONNXTensorElementDataType custom_op2_output_types[] = {
-        ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
-    };
-    OrtInitializeSimpleCustomOp(
-        ort,
-        "CustomOpTwo",
-        1, custom_op2_input_types,
-        1, custom_op2_output_types,
-        kernel2_compute,
-        &custom_op2);
-
-    if ((ort_status = ort->CustomOpDomain_Add(custom_op_domain, &custom_op2.base_op)) != NULL) {
-        return ort_error(ort, ort_status);
-    }
-
     OrtSessionOptions* ort_session_options;
     if ((ort_status = ort->CreateSessionOptions(&ort_session_options)) != NULL) {
+        return ort_error(ort, ort_status);
+    }
+
+    OrtCustomOpDomain* custom_op_domain;
+    if ((ort_status = OrtSimpleCustomOpRegister(
+        ort,
+        NULL /* allocator */,
+        "test.customop",
+        custom_ops,
+        sizeof(custom_ops) / sizeof(custom_ops[0]),
+        &custom_op_domain,
+        NULL /* custom_ops */)) != NULL) {
         return ort_error(ort, ort_status);
     }
 
